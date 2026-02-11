@@ -1,0 +1,146 @@
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == "develop"
+
+stages:
+  - install
+  - validate
+  - test
+  - build
+  - deploy
+
+# Default configuration for all jobs
+default:
+  image: node:20-alpine
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - node_modules/
+      - .next/cache/
+    policy: pull
+
+# Install dependencies
+install:
+  stage: install
+  script:
+    - npm ci
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - node_modules/
+      - .next/cache/
+    policy: pull-push
+  artifacts:
+    paths:
+      - node_modules/
+    expire_in: 1 hour
+
+# Linting
+lint:
+  stage: validate
+  script:
+    - npm run lint
+  needs:
+    - job: install
+      artifacts: true
+
+# Type checking
+type-check:
+  stage: validate
+  script:
+    - npm run type-check
+  needs:
+    - job: install
+      artifacts: true
+
+# Format checking
+format-check:
+  stage: validate
+  script:
+    - npm run format:check
+  needs:
+    - job: install
+      artifacts: true
+
+# Run tests
+test:
+  stage: test
+  script:
+    - npm run test:coverage
+  coverage: '/All files[^|]*\|[^|]*\s+([\d\.]+)/'
+  artifacts:
+    when: always
+    paths:
+      - coverage/
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage/cobertura-coverage.xml
+    expire_in: 30 days
+  needs:
+    - job: install
+      artifacts: true
+    - job: lint
+      artifacts: false
+    - job: type-check
+      artifacts: false
+    - job: format-check
+      artifacts: false
+
+# Build application
+build:
+  stage: build
+  script:
+    - npm run build
+  artifacts:
+    paths:
+      - .next/
+    expire_in: 1 hour
+  needs:
+    - job: install
+      artifacts: true
+    - job: lint
+      artifacts: false
+    - job: type-check
+      artifacts: false
+    - job: format-check
+      artifacts: false
+
+# Deploy to Vercel (Production)
+deploy:production:
+  stage: deploy
+  script:
+    - npm install -g vercel
+    - vercel pull --yes --environment=production --token=$VERCEL_TOKEN
+    - vercel build --prod --token=$VERCEL_TOKEN
+    - vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN
+  environment:
+    name: production
+    url: https://your-project.vercel.app
+  needs:
+    - job: build
+      artifacts: true
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# Deploy to Vercel (Preview)
+deploy:preview:
+  stage: deploy
+  script:
+    - npm install -g vercel
+    - vercel pull --yes --environment=preview --token=$VERCEL_TOKEN
+    - vercel build --token=$VERCEL_TOKEN
+    - vercel deploy --prebuilt --token=$VERCEL_TOKEN
+  environment:
+    name: preview/$CI_COMMIT_REF_NAME
+  needs:
+    - job: build
+      artifacts: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
